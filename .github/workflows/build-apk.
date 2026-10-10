@@ -1,0 +1,66 @@
+name: Build VLC Neon APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main", "master" ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vlc-neon-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Android debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout customized source ZIP repository
+        uses: actions/checkout@v4
+        with:
+          path: customized-source
+
+      # The uploaded ZIP is missing the libvlcjni source/submodule and Gradle wrapper.
+      # Restore the complete upstream checkout, then overlay this repository's files.
+      - name: Fetch complete upstream VLC Android source
+        run: git clone --depth 1 --recurse-submodules https://code.videolan.org/videolan/vlc-android.git "$RUNNER_TEMP/vlc-upstream"
+
+      - name: Overlay customized source onto complete checkout
+        run: |
+          rsync -a --exclude='.git/' "$GITHUB_WORKSPACE/customized-source/" "$RUNNER_TEMP/vlc-upstream/"
+          test -d "$RUNNER_TEMP/vlc-upstream/libvlcjni/libvlc" || {
+            echo 'ERROR: libvlcjni/libvlc is still missing after fetching upstream.'
+            exit 1
+          }
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Build VLC Neon debug APK
+        working-directory: ${{ runner.temp }}/vlc-upstream
+        run: gradle :application:app:assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VLC-Neon-debug-APK
+          path: ${{ runner.temp }}/vlc-upstream/application/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+          retention-days: 14
